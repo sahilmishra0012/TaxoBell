@@ -15,7 +15,20 @@ import csv
 import collections
 
 
-def create_child_to_parents_map(taxo_file_path: str, dataset: str) -> Dict[str, List[str]]:
+def create_child_to_parents_map(taxo_file_path: str, dataset: str) -> dict:
+    """
+    Reads a raw taxonomy file and creates a JSON mapping of Child ID -> List of Parent IDs.
+
+    This is useful for multi-parent datasets (DAGs) to quickly look up all valid parents 
+    for a specific concept.
+
+    Args:
+        taxo_file_path (str): Path to the raw taxonomy text file (tab-separated).
+        dataset (str): Name of the dataset (used for output directory).
+
+    Returns:
+        None: Writes the result to `../data/{dataset}/test_taxo.json`.
+    """
     with open(f"../data/{dataset}/key_value.json", 'r') as f:
         id_term_map = json.load(f)
 
@@ -43,6 +56,13 @@ def create_child_to_parents_map(taxo_file_path: str, dataset: str) -> Dict[str, 
 
 
 def terms_to_json(file, dataset):
+    """
+    Converts a tab-separated term definition file into a JSON dictionary.
+
+    Args:
+        file (str): Path to the input file.
+        dataset (str): Dataset name.
+    """
     def_dict = {}
 
     with open(file, 'r') as file:
@@ -55,6 +75,10 @@ def terms_to_json(file, dataset):
 
 
 def csv_to_json(csv_file):
+    """
+    Parses a CSV file containing (id, label, term, definition) and saves a 
+    Term->Definition JSON mapping.
+    """
     def_dict = {}
     with open(csv_file, mode='r') as file:
         csv_reader = csv.reader(file)
@@ -69,6 +93,17 @@ def csv_to_json(csv_file):
 
 
 def analyze_parent_child_relationships(filepath: str):
+    """
+    Analyzes a taxonomy file to determine if it is a Tree (single parent) or a DAG (multi-parent).
+
+    Args:
+        filepath (str): Path to the taxonomy file.
+
+    Returns:
+        tuple: 
+            - child_to_parent_dict (dict): Map of Child->Parent if unique.
+            - multi_parent_children (dict): Map of Child->[Parents] if overlaps exist.
+    """
     child_to_parents_map = collections.defaultdict(list)
 
     print(f"--- Analyzing file: {filepath} ---")
@@ -128,6 +163,9 @@ def analyze_parent_child_relationships(filepath: str):
 
 
 def id_to_json(filepath: str, dataset: str):
+    """
+    Reads a file mapping IDs to Terms and saves it as a JSON key-value store.
+    """
     try:
         with open(filepath, 'r') as f:
             contents = f.readlines()
@@ -140,6 +178,28 @@ def id_to_json(filepath: str, dataset: str):
 
 
 def pre_process_multiparent(args, outID=True):
+    """
+    Preprocesses datasets that have a Directed Acyclic Graph (DAG) structure,
+    where a concept can have multiple parents (e.g., Computer Science, MeSH).
+
+    Pipeline:
+    1. Loads raw taxonomy and term files.
+    2. Maps string concepts to Integer IDs.
+    3. Constructs Adjacency Lists (Forward and Reverse).
+    4. Loads Context/Definitions for embedding initialization.
+    5. Generates Training Triplets (Child, Parent, Negative Parent).
+       - **Hard Negative Sampling**: Prioritizes siblings (nodes sharing a parent) 
+         and grandparents as negative samples to make training robust.
+       - **Fallback**: Uses random sampling if hard negatives are insufficient.
+
+    Args:
+        args: Argument parser object containing dataset paths and hyperparameters.
+        outID (bool): If True, processes using Integer IDs.
+
+    Returns:
+        tuple: A collection of dictionaries, lists, and sets required to initialize 
+               the `Data_TRAIN_Multiparent` and `Data_TEST_Multiparent` classes.
+    """
     print("Processing Multiparent datasets...")
     dataset = args.dataset
     negsamples = args.negsamples
@@ -209,6 +269,7 @@ def pre_process_multiparent(args, outID=True):
 
     all_taxo_dict = collections.defaultdict(list)
     all_taxo_dict_reverse = collections.defaultdict(list)
+
     if outID:
         concept_set = set(concept_id.values())
         for parent_str, children_str in all_taxo_dict_str.items():
@@ -222,10 +283,6 @@ def pre_process_multiparent(args, outID=True):
         all_taxo_dict = all_taxo_dict_str
 
     print(f"Loaded {len(concept_set)} total concepts.")
-
-    # train_taxonomy_terms_file = os.path.join(
-    #     f"../data/{dataset}/{dataset}.terms.train")
-    # train_taxonomy_terms = load_file(train_taxonomy_terms_file)
 
     train_taxnomy_file = os.path.join(
         f"../data/{dataset}/{dataset}_train.taxo")
@@ -273,16 +330,12 @@ def pre_process_multiparent(args, outID=True):
             id_context[cid] = f"{concept_lower}: {def_dic[concept_lower]}"
         else:
             id_context[cid] = f"{concept_lower}: {concept_lower}"
-
             definitions_not_found_count += 1
 
     test_terms_file = os.path.join(
         f"../data/{dataset}/{dataset}_test.terms")
-    # val_terms_file = os.path.join(
-    #     f"../data/{dataset}/{dataset}_validation.terms")
 
     test_term_lines = load_file(test_terms_file)
-    # val_term_lines = load_file(val_terms_file)
     with open(f"../data/{args.dataset}/test_taxo.json") as f:
         test_map = json.load(f)
 
@@ -318,51 +371,6 @@ def pre_process_multiparent(args, outID=True):
     child_parent_pair = [[child, parent]
                          for child, parent in zip(child_list, parent_list)]
 
-    # term_id_map = {}
-    # for k, v in id_term_map.items():
-    #     if v not in term_id_map:
-    #         term_id_map[v] = k
-
-    # c_p_terms = list()
-    # for child, parent in child_parent_pair:
-    #     child_term = id_term_map[id_concept[child]]
-    #     parent_term = id_term_map[id_concept[parent]]
-
-    #     c_p_terms.append([child_term, parent_term])
-
-    # # Filter only unique ones
-
-    # seen_doubles = set()
-    # filtered_list = list()
-    # for double in c_p_terms:
-    #     current_double = double
-
-    #     if tuple(current_double) not in seen_doubles:
-    #         filtered_list.append(current_double)
-    #         seen_doubles.add(tuple(current_double))
-
-    # child_parent_pair = list()
-    # for child, parent in filtered_list:
-    #     c_id = concept_id[term_id_map[child]]
-    #     p_id = concept_id[term_id_map[parent]]
-
-    #     child_parent_pair.append([c_id, p_id])
-
-    # unique_child_list = sorted(list(set(child_list)))
-    # for cid in tqdm(unique_child_list, desc="Generating Negatives"):
-    #     true_parents = all_taxo_dict_reverse[cid]
-    #     candidate_pool = [
-    #         pid for pid in list(train_concept_set) if pid != cid and pid not in true_parents]
-
-    #     num_to_sample = min(negsamples, len(candidate_pool))
-    #     if num_to_sample > 0:
-    #         neg_parents = np.random.choice(
-    #             candidate_pool, num_to_sample, replace=False).tolist()
-    #     else:
-    #         neg_parents = []
-
-    #     sampled_negative_parent_dict[cid] = neg_parents
-    #     negative_parent_list.extend(neg_parents)
     count_hard_neg_samples = 0
     count_fallback_samples = 0
 
@@ -371,10 +379,10 @@ def pre_process_multiparent(args, outID=True):
     print(
         f"Definitions for {definitions_not_found_count} concepts not found in the wiki dictionary.")
     print(f"There are {len(child_parent_pair)} in the training set ")
+
     for child_id, parent_id in tqdm(child_parent_pair, desc="Generating (c, p, n) Triplets"):
 
         found_negatives = []
-
         hard_candidate_pool = set()
 
         siblings = set(all_taxo_dict.get(parent_id, []))
@@ -419,12 +427,8 @@ def pre_process_multiparent(args, outID=True):
         f"Skipped for {count_fallback_samples} triplets since no hard negative was found. Using fallback option.")
 
     child_neg_parent_pair = []
-
     child_parent_negative_parent_triple = training_triplets
-    # child_parent_negative_parent_triple = list()
-    # for c, p in child_parent_pair:
-    #     for neg in sampled_negative_parent_dict[c]:
-    #         child_parent_negative_parent_triple.append([c, p, neg])
+
     print(
         f"There are {len(child_parent_negative_parent_triple)} samples for training")
 
@@ -432,19 +436,6 @@ def pre_process_multiparent(args, outID=True):
         f"There are {len(test_concepts_ids)} test concepts with {len(test_gts_ids)} grount truth mappings")
 
     path2root = collections.defaultdict(list)
-
-    # print("Finding path to roots for all nodes and storing..")
-    # for node in train_concept_set:
-    #     current = node
-    #     lev = 0
-    #     while current != supernode:
-    #         path2root[node].append(current)
-    #         current = list(chd2par_dict[current])[0]
-    #         lev += 1
-
-    #     print(lev)
-    #     path2root[node].append(supernode)
-
     print("Preprocessing complete.")
 
     return (
@@ -457,14 +448,19 @@ def pre_process_multiparent(args, outID=True):
 
 def preprocess(args, outID=True):
     """
-    Preprocesses taxonomy data for taxonomy construction and evaluation tasks.
+    Preprocesses standard taxonomy data (Tree structures like WordNet or single-parent datasets).
+
+    Differences from `pre_process_multiparent`:
+    - optimized for finding siblings, cousins, and specific relative structures.
+    - handles the "wordnet" supernode specifically.
+    - assumes a stricter hierarchy logic.
 
     Args:
-        args: Command-line arguments or an object containing dataset parameters.
+        args: Command-line arguments.
         outID (bool): If True, outputs IDs for concepts; otherwise, outputs names.
 
     Returns:
-        Tuple containing processed data structures for taxonomy evaluation.
+        Tuple containing processed data structures for single-parent taxonomy evaluation.
     """
     dataset = args.dataset
 
@@ -647,7 +643,13 @@ def preprocess(args, outID=True):
 
 
 def create_multiparent_data(args):
+    """
+    Wrapper function that runs the multi-parent preprocessing pipeline and saves the 
+    result as a pickle file for efficient loading during training.
 
+    Args:
+        args: Command-line arguments containing dataset configuration.
+    """
     print("Waiting for preprocess data....")
 
     concept_set, concept_id, id_concept, id_context, train_concept_set, taxo_dict, negative_parent_dict, child_parent_negative_parent_triple, parent_list, child_list, negative_parent_list, all_taxo_dict, path2root, child_parent_pair, child_neg_parent_pair, val_concept, val_gt, test_concepts_id, test_gt = pre_process_multiparent(
@@ -687,7 +689,14 @@ def create_multiparent_data(args):
 
 
 def create_data(args, maxlimit=None):
+    """
+    Wrapper function that runs the single-parent (tree) preprocessing pipeline and saves the 
+    result as a pickle file.
 
+    Args:
+        args: Command-line arguments.
+        maxlimit: Unused argument kept for API consistency.
+    """
     concept_set, concept_id, id_concept, id_context, train_concept_set, train_taxo_dict, negative_parent_dict, train_child_parent_negative_parent_triple, train_parent_list, \
         train_child_list, train_negative_parent_list, train_sibling_dict, train_cousin_dict, train_relative_triple, test_concepts_id, test_gt_id, \
         all_taxo_dict, path2root, sib_pair, child_parent_pair, child_neg_parent_pair, child_sibling_pair, val_concept, val_gt, test_concept, test_gt = preprocess(

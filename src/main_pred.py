@@ -39,6 +39,8 @@ parser.add_argument('--lr', type=float, default=2e-5,
 parser.add_argument('--eps', type=float, default=1e-8, help='adamw_epsilon')
 parser.add_argument('--optim', type=str, default="adamw", help='Optimizer')
 parser.add_argument('--embed_size', type=int, default=8, help='Embedding Size')
+parser.add_argument('--is_multi_parent', type=float, default=False,
+                    help='Does a single child have multiple parents in the dataset?', required=True)
 
 # Others
 parser.add_argument('--cuda', type=bool, default=True,

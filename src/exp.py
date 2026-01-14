@@ -24,8 +24,35 @@ os.environ["WANDB_MODE"] = "offline"
 
 
 class Experiments(object):
+    """
+    Manages the end-to-end lifecycle of the Gaussian Embedding experiments.
+
+    This class handles:
+    1. Data Loading: preparing train and test dataloaders.
+    2. Model Initialization: setting up the GaussianBox model and optimizer.
+    3. Training: The main training loop with gradient accumulation and checkpointing.
+    4. Evaluation: Computing metrics (MRR, Hit@K, etc.) using Bhattacharyya Coefficient and KL Divergence.
+    5. Visualization: Generating 2D plots of Gaussian ellipses for case studies.
+
+    Attributes:
+        args (Namespace): Configuration arguments.
+        tokenizer: HuggingFace tokenizer.
+        train_loader (DataLoader): Loader for training triplets.
+        test_loader (DataLoader): Loader for candidate parents during evaluation.
+        train_set (Dataset): Training dataset object.
+        test_set (Dataset): Testing dataset object.
+        model (GaussianBox): The taxonomy induction model.
+        optimizer (torch.optim.Optimizer): The optimizer (Adam/AdamW).
+    """
 
     def __init__(self, args):
+        """
+        Initializes the experiment environment.
+
+        Args:
+            args (Namespace): Parsed command-line arguments containing hyperparameters,
+                              dataset paths, and model configuration.
+        """
         super(Experiments, self).__init__()
 
         self.args = args
@@ -61,6 +88,7 @@ class Experiments(object):
             wandb.run.log_code(".")
 
     def __load_tokenizer__(self):
+        """Loads the specific tokenizer based on the selected backbone model (BERT, Snowflake, E5)."""
         if self.args.model == 'bert':
             tokenizer = BertTokenizer.from_pretrained(
                 '/home/models/bert-base-uncased')
@@ -74,6 +102,7 @@ class Experiments(object):
         return tokenizer
 
     def _select_optimizer(self):
+        """Configures the optimizer with weight decay settings."""
         parameters = [{"params": [p for n, p in self.model.named_parameters()],
                        "weight_decay": 0.0},]
 
@@ -86,10 +115,24 @@ class Experiments(object):
         return optimizer
 
     def _set_device(self):
+        """Moves the model to GPU if CUDA is enabled."""
         if self.args.cuda:
             self.model = self.model.cuda()
 
     def train_one_step(self, it, encode_parent, encode_child, encode_negative_parents):
+        """
+        Performs a single training step (forward pass, loss computation, backward pass).
+        Handles gradient accumulation.
+
+        Args:
+            it (int): Current iteration index.
+            encode_parent (dict): Tokenized input for parent concepts.
+            encode_child (dict): Tokenized input for child concepts.
+            encode_negative_parents (dict): Tokenized input for negative samples.
+
+        Returns:
+            torch.Tensor: The calculated loss for this step.
+        """
 
         self.model.train()
 
@@ -107,6 +150,16 @@ class Experiments(object):
         return loss
 
     def train(self, checkpoint=None, save_path=None):
+        """
+        Main training loop.
+
+        Iterates through epochs, performs training steps, saves checkpoints, 
+        and triggers evaluation on the test set.
+
+        Args:
+            checkpoint (str, optional): Path to a checkpoint to resume training from.
+            save_path (str, optional): Custom path to save the best model.
+        """
         time_tracker = []
         save_path = f"../final_result/{self.args.dataset}/BC_volume_containment_{self.args.expID}_{self.args.method}_{self.args.model}_{self.args.negsamples}.pt"
         test_acc = test_mrr = test_wu_p = 0
@@ -208,8 +261,20 @@ class Experiments(object):
     def plot_gaussians(self, q_mu, q_sigma, top_mus, top_sigmas, query_name, top_names, save_path,
                        extra_gts=None):
         """
-        Creates a highly distinguishable, single-panel plot that always includes the
-        ground truth, using PCA to find the optimal 2D projection for all concepts.
+        Visualizes the Gaussian embeddings of a query and its predicted parents/ground truths.
+
+        Uses PCA to project high-dimensional Gaussian parameters (Mean and Covariance) 
+        onto a 2D plane for plotting ellipses.
+
+        Args:
+            q_mu (Tensor): Query mean vector.
+            q_sigma (Tensor): Query covariance matrix/diagonal.
+            top_mus (list[Tensor]): List of means for top predicted parents.
+            top_sigmas (list[Tensor]): List of covariances for top predicted parents.
+            query_name (str): Name of the child concept.
+            top_names (list[str]): Names of predicted parents.
+            save_path (str): File path to save the generated plot.
+            extra_gts (list, optional): List of ground truth parameters if they weren't in the top predictions.
         """
         fig, ax = plt.subplots(figsize=(16, 12))
 
@@ -313,6 +378,22 @@ class Experiments(object):
         plt.close()
 
     def case_study(self, tag=None, path=None):
+        """
+        Performs a detailed qualitative analysis (Case Study).
+
+        1. Loads a trained model.
+        2. Computes embeddings for queries and all candidates.
+        3. Ranks candidates based on Bhattacharyya Coefficient and KL Divergence.
+        4. Writes detailed results to a CSV file (scores, volumes, containment checks).
+        5. Generates visualization plots for the top queries using `plot_gaussians`.
+
+        Args:
+            tag (str, optional): If 'test', loads weights from `path`.
+            path (str, optional): Path to the checkpoint file.
+
+        Returns:
+            tuple: (test_metrics, test_metrics_kl) dictionaries containing quantitative results.
+        """
         print("Prediction starting.....")
         if (tag == "test"):
             if path:
@@ -536,6 +617,19 @@ class Experiments(object):
         return test_metrics, test_metrics_kl
 
     def predict(self, tag=None, path=None):
+        """
+        Evaluates the model on the test dataset.
+
+        Computes the similarity scores (Bhattacharyya and KL) between test queries 
+        and all candidate parents. Calculates standard ranking metrics.
+
+        Args:
+            tag (str, optional): If 'test', forces loading weights from `path`.
+            path (str, optional): Path to a checkpoint file.
+
+        Returns:
+            tuple: (test_metrics, test_metrics_kl) containing Precision, Recall, MRR, Wu-Palmer scores.
+        """
         print("Prediction starting.....")
         if (tag == "test"):
             if path:

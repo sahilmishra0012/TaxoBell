@@ -1,16 +1,18 @@
-import test
 import numpy as np
-import pandas as pd
-import random
 import torch
-import pytz
+import random
 from datetime import datetime, timezone
-import json
-
-# Logging and multi prediction utils file
+import pytz
+import os
 
 
 def set_seed(seed):
+    """
+    Sets the random seed for reproducibility across standard libraries and PyTorch.
+
+    Args:
+        seed (int): The seed value.
+    """
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -18,6 +20,10 @@ def set_seed(seed):
 
 
 def print_local_time():
+    """
+    Prints the current time in Pacific Time format (converted from UTC).
+    Note: The implementation uses 'Asia/Kolkata' timezone but labels it 'Pacific time'.
+    """
     utc_dt = datetime.now(timezone.utc)
     PST = pytz.timezone('Asia/Kolkata')
     print("Pacific time {}".format(utc_dt.astimezone(PST).isoformat()))
@@ -25,8 +31,22 @@ def print_local_time():
 
 
 def log_predictions_to_file(args, pred_ids, gt, id_concept, test_query_ids, output_file_path="../outputs/wordnet_verb/wordnet_verb.out", top_k=10):
+    """
+    Logs qualitative prediction results (Query, Ground Truths, Top-K Predictions) to a text file.
 
+    Args:
+        args: Argument parser object containing dataset names.
+        pred_ids (list): List of predicted parent IDs for each query.
+        gt (list): List of ground truth parent IDs for each query.
+        id_concept (dict): Mapping from ID to concept name.
+        test_query_ids (list): List of query concept IDs.
+        output_file_path (str): Default path (overridden inside function).
+        top_k (int): Number of top predictions to log.
+    """
     output_file_path = f"../outputs/{args.dataset}/{args.dataset}_0_kl_case_study.out"
+
+    os.makedirs(os.path.dirname(output_file_path), exist_ok=True)
+
     with open(output_file_path, 'a', encoding='utf-8') as f:
         f.write(f"\n{'='*20} EPOCH {'='*20}\n\n")
 
@@ -51,11 +71,23 @@ def log_predictions_to_file(args, pred_ids, gt, id_concept, test_query_ids, outp
                 f.write(f"      {rank}. {pred_name}{marker}\n")
             f.write("-" * 50 + "\n")
 
-    print(
-        f"Predictions for epoch have been appended to {output_file_path}")
+    print(f"Predictions for epoch have been appended to {output_file_path}")
 
 
 def accuracy(pred, gt, tr, te, id_term):
+    """
+    Calculates simple accuracy (exact match) of the top prediction.
+
+    Args:
+        pred: Predictions array.
+        gt: Ground truth array.
+        tr: Train mapping.
+        te: Test mapping.
+        id_term: ID to Term mapping.
+
+    Returns:
+        float: Accuracy score.
+    """
     preds = np.array(list(pred[:, 0]))
     gts = np.array(list(gt))
 
@@ -66,13 +98,27 @@ def accuracy(pred, gt, tr, te, id_term):
         preds_terms.append(id_term[tr[preds[i]]])
         gts_terms.append(id_term[te[gts[i]]])
     acc = np.sum(preds_terms == gts_terms)/len(gts_terms)
-    for i in range(len(preds_terms)):
-        print(f"Predicted: {preds_terms[i]}, GT: {gts_terms[i]}")
     return acc
 
 
 def wu_p_score(pred, gt, path2root, compiled):
+    """
+    Calculates the Wu-Palmer Similarity score.
 
+    Wu-Palmer measures the semantic similarity of two concepts based on their depth 
+    in the taxonomy and the depth of their Least Common Ancestor (LCA).
+
+    Formula: 2 * depth(LCA) / (depth(concept1) + depth(concept2))
+
+    Args:
+        pred: Predicted parent IDs.
+        gt: Ground truth parent IDs.
+        path2root (dict): Mapping of node ID to path to root.
+        compiled (list): List to store depths (side-effect).
+
+    Returns:
+        float: Average Wu-Palmer score.
+    """
     pred = np.squeeze(pred[:, 0])
     wu_p = 0
     for i in range(len(pred)):
@@ -91,6 +137,20 @@ def wu_p_score(pred, gt, path2root, compiled):
 
 
 def hits_at_k(pred, gt, k):
+    """
+    Calculates Hits@K.
+
+    Checks if *at least one* ground truth parent appears in the top-K predictions 
+    for a query.
+
+    Args:
+        pred (list): List of predicted ranked lists.
+        gt (list): List of lists of ground truth IDs.
+        k (int): Threshold for top-K.
+
+    Returns:
+        float: Fraction of queries with at least one hit in top K.
+    """
     num_queries = len(gt)
     if num_queries == 0:
         return 0.0
@@ -102,7 +162,6 @@ def hits_at_k(pred, gt, k):
         true_parents = set(gt[i])
 
         if not true_parents:
-
             continue
 
         if not preds_k.isdisjoint(true_parents):
@@ -113,20 +172,24 @@ def hits_at_k(pred, gt, k):
 
 def recall_k(pred, gt, k):
     """
-    Calculates the fraction of triplets where the true parent is in the top-k predictions.
-    This is equivalent to Hits@k or Recall@k evaluated over all triplets.
+    Calculates Recall@K (Triplets).
+
+    This measures the recall over all valid (child, parent) edges.
+    Formula: (Total correctly retrieved parents in top K) / (Total number of ground truth parents).
 
     Args:
         pred (list of lists): The ranked predictions for each sample.
         gt (list of lists): The ground truth labels for each sample.
-        k (int): The "k" in Precision@k.
+        k (int): The "k" threshold.
+
+    Returns:
+        float: Recall score.
     """
     total_hits = 0
     num_triplets = 0
 
     for i in range(len(gt)):
         preds_k = set(pred[i][:k])
-
         true_parents = gt[i]
         num_triplets += len(true_parents)
 
@@ -144,15 +207,28 @@ def recall_k(pred, gt, k):
 
 
 def rank_scores(pred, gt):
+    """
+    Calculates Mean Reciprocal Rank (MRR) and Mean Rank (MR).
+
+    MRR = (1/|Q|) * Sum(1 / rank_i)
+    MR = (1/|Q|) * Sum(rank_i)
+
+    Evaluated over all individual (child, parent) ground truth pairs.
+
+    Args:
+        pred (list): Ranked lists of predictions.
+        gt (list): Ground truth lists.
+
+    Returns:
+        tuple: (mrr, mr)
+    """
     total_mrr = 0.0
     total_mr = 0.0
     num_triplets = 0
 
     for i in range(len(gt)):
         ranked_list = pred[i]
-
         true_parents = gt[i]
-
         num_triplets += len(true_parents)
 
         rank_map = {item: rank + 1 for rank, item in enumerate(ranked_list)}
@@ -160,7 +236,6 @@ def rank_scores(pred, gt):
         for true_parent in true_parents:
             if true_parent in rank_map:
                 rank = rank_map[true_parent]
-
                 total_mr += rank
                 total_mrr += 1 / rank
             else:
@@ -174,57 +249,51 @@ def rank_scores(pred, gt):
 
     return mrr, mr
 
-# def hits_at_k(pred, gt, k):
-#     preds = np.array(list(pred[:, :k]))
-#     gts = np.array(list(gt))
-#     val = np.sum(preds == gts[:, np.newaxis])*1.0/(len(gt)*k)
-#     return val
-
-
-# def rank_scores(pred, gt):
-#     mrr = 0
-#     mr = 0
-#     dcg = 0.0
-#     idcg = 0.0
-#     cnt = 0
-#     for i in range(len(pred)):
-#         for j in range(len(pred[i])):
-#             if pred[i][j] == gt[i]:
-#                 # print(f"For {i}th element: We've found it at {j}th position")
-#                 mr += (j+1)
-#                 mrr += (1/(j+1))
-#                 cnt += 1
-#                 dcg += (1/np.log2((j+1)+1))
-#                 idcg += (1/(np.log2(cnt+1)))
-#                 break
-#     ndcg = dcg/idcg if idcg != 0 else 0
-#     ndcg = ndcg/len(gt)
-#     mrr = mrr/len(gt)
-#     mr = mr/len(gt)
-
-#     return mrr, mr
-
 
 def metrics(args, indices, gt, candidate_list, id_concept, test_concepts_id, out=False):
+    """
+    Wrapper function to compute all evaluation metrics.
+
+    Args:
+        args: Argument object.
+        indices (Tensor): Indices of sorted predictions (highest score first).
+        gt (list): Ground truth IDs.
+        candidate_list (np.array): Array mapping indices back to concept IDs.
+        id_concept (dict): Map of ID to concept name.
+        test_concepts_id (list): List of test concept IDs.
+        out (bool): If True, logs predictions to a file.
+
+    Returns:
+        dict: Dictionary containing Prec@1/5/10, Recall@1/5/10, MRR, MR.
+    """
     ind = np.squeeze(indices.detach().cpu().numpy())
     x, y = ind.shape
 
     pred = np.zeros_like(ind)
-
     for i in range(x):
-
         pred[i] = candidate_list[ind[i]]
 
-    mrr, mr = rank_scores(
-        pred, gt)
+    mrr, mr = rank_scores(pred, gt)
+
+    prec1 = hits_at_k(pred, gt, 1)
     prec5 = hits_at_k(pred, gt, 5)
     prec10 = hits_at_k(pred, gt, 10)
-    prec1 = hits_at_k(pred, gt, 1)
+
     rec1 = recall_k(pred, gt, 1)
     rec5 = recall_k(pred, gt, 5)
     rec10 = recall_k(pred, gt, 10)
+
     if out:
         log_predictions_to_file(
             args, pred, gt, id_concept, list(test_concepts_id))
 
-    return {"Prec@1": prec1, "MRR": mrr, "MR": mr, "Recall@1": rec1, "Prec@5": prec5, "Prec@10": prec10, "Recall@5": rec5, "Recall@10": rec10}
+    return {
+        "Prec@1": prec1,
+        "MRR": mrr,
+        "MR": mr,
+        "Recall@1": rec1,
+        "Prec@5": prec5,
+        "Prec@10": prec10,
+        "Recall@5": rec5,
+        "Recall@10": rec10
+    }

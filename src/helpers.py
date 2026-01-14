@@ -10,6 +10,12 @@ data_dir = Path(__file__).parent
 
 
 def set_seed(seed):
+    '''
+    Setting the random seed for all modules.
+
+    Args:
+        seed (int): Seed value
+    '''
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
